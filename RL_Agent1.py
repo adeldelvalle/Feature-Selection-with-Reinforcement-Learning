@@ -13,7 +13,7 @@ import random
 class Net(nn.Module):
     def __init__(self, feature_action_num):
         super(Net, self).__init__()
-        self.fc1 = nn.Linear(feature_action_num, 256)
+        self.fc1 = nn.Linear(2 * feature_action_num, 256)  # Adjust input dimension here
         self.fc2 = nn.Linear(256, 128)
         self.ft_fc = nn.Linear(128, feature_action_num)
 
@@ -33,7 +33,7 @@ class Autofeature_agent:
         self.batch_size = batch_size
         self.update_freq = update_freq
         self.memory_capacity = mem_cap
-        self.mem = np.zeros((mem_cap, 2 * env.state_len + 2))  # state, action, reward, next_state
+        self.mem = np.zeros((self.memory_capacity, 4 * self.env.state_len + 2))
         self.mem_counter = 0
         self.learning_step_counter = 0
 
@@ -43,20 +43,23 @@ class Autofeature_agent:
         self.loss_func = nn.MSELoss()
 
     def choose_action(self, state):
-        state = torch.tensor([state], dtype=torch.float)
+        processed_state = self.state_representation(state)
+        processed_state = processed_state.unsqueeze(0)  # Add batch dimension
         if np.random.uniform() > self.epsilon:
-            print("choose by network")
             self.eval_net.eval()
             with torch.no_grad():
-                action_values = self.eval_net(state)
+                action_values = self.eval_net(processed_state)
             action = action_values.argmax().item()
         else:
-            print("choose by random")
             action = random.randrange(self.env.state_len)
         return action
 
     def store_transition(self, state, action, reward, next_state):
-        transition = np.hstack((state, [action, reward], next_state))
+        state_vec = self.state_representation(state).numpy()
+        next_state_vec = self.state_representation(next_state).numpy()
+        action_reward = np.array([action, reward])  # 1D array for action and reward
+        transition = np.concatenate((state_vec, action_reward, next_state_vec))
+
         index = self.mem_counter % self.memory_capacity
         self.mem[index, :] = transition
         self.mem_counter += 1
@@ -66,10 +69,11 @@ class Autofeature_agent:
             return
         sample_index = np.random.choice(min(self.mem_counter, self.memory_capacity), self.batch_size)
         batch_memory = self.mem[sample_index, :]
-        batch_state = torch.tensor(batch_memory[:, :self.env.state_len], dtype=torch.float)
-        batch_action = torch.tensor(batch_memory[:, self.env.state_len].astype(int), dtype=torch.long)
-        batch_reward = torch.tensor(batch_memory[:, self.env.state_len + 1], dtype=torch.float)
-        batch_next_state = torch.tensor(batch_memory[:, -self.env.state_len:], dtype=torch.float)
+        batch_state = torch.tensor(batch_memory[:, :2 * self.env.state_len],
+                                   dtype=torch.float)  # Ensure this matches the flattened state dimension
+        batch_action = torch.tensor(batch_memory[:, 2 * self.env.state_len].astype(int), dtype=torch.long)
+        batch_reward = torch.tensor(batch_memory[:, 2 * self.env.state_len + 1], dtype=torch.float)
+        batch_next_state = torch.tensor(batch_memory[:, -(2 * self.env.state_len):], dtype=torch.float)
 
         q_eval = self.eval_net(batch_state).gather(1, batch_action.unsqueeze(1))
         q_next = self.target_net(batch_next_state).detach()
@@ -90,6 +94,8 @@ class Autofeature_agent:
         const_a = math.pow(0.001, 1 / episode_num)
 
         for episode in range(episode_num):  # Adjust number of episodes as needed
+            print('-' * 20 + "New Episode :D :" + '-' * 20)
+
             self.env.reset()
             state = self.env.cur_state
             total_reward = 0
@@ -112,3 +118,16 @@ class Autofeature_agent:
                 self.epsilon = math.pow(const_a, episode)
 
             print(f"Episode {episode + 1}, Total reward: {total_reward}")
+
+    def state_representation(self, state):
+        """
+        Convert the state into a flattened tensor suitable for neural network processing.
+        This function assumes that 'state' is structured with each feature's binary
+        inclusion state and information gain as separate entries.
+        :param state: A tuple where state[0] contains binary feature inclusion flags
+                      and state[1] contains corresponding information gain values.
+        :return: A single flat tensor combining both parts of the state.
+        """
+        binary_flags = torch.tensor(state[0], dtype=torch.float32)
+        info_gains = torch.tensor(state[1], dtype=torch.float32)
+        return torch.cat((binary_flags, info_gains))

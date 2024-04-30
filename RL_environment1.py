@@ -6,6 +6,14 @@ import torch
 import torch.nn.functional as F
 from scipy.spatial import distance
 import numpy as np
+from sklearn.metrics import mutual_info_score
+
+
+
+# TODO: - Modify action space: Add Feature/Remove Feature
+#       - Add state variables: Information Gain
+#       - Modify algorithm to select subset of features, not only train once per feature
+#
 
 
 class ISOFAEnvironment:
@@ -16,8 +24,8 @@ class ISOFAEnvironment:
         self.max_try_num = max_try_num
         self.try_num = 0
         self.y = self.data[target]
-        self.data.drop([target], axis=1,inplace=True)
-
+        self.data.drop([target], axis=1, inplace=True)
+        self.action_space = {'add': [], 'delete': []}
         self.selected_features = []  # Indices of selected features
         self.current_model = None
         self.cur_score = 0
@@ -25,7 +33,7 @@ class ISOFAEnvironment:
         self.cur_state = None
         self.prev_score = 0
         self.state_len = len(self.data.columns)
-        self.initial_feature_fraction = 0.3
+        self.initial_feature_fraction = 0.2
 
         self.init_environment()
 
@@ -52,8 +60,9 @@ class ISOFAEnvironment:
 
     def update_state(self):
         # State vector indicating if each feature is selected
-        self.cur_state = [1 if i in self.selected_features else 0 for i in
-                          range(len(self.data.columns))]
+        self.cur_state = [[1 if i in self.selected_features else 0 for i in
+                          range(len(self.data.columns))], [self.calc_mutual_info(feat) for feat in self.data.columns]]
+        print(self.cur_state)
 
     def step(self, action):
         """
@@ -81,7 +90,7 @@ class ISOFAEnvironment:
         new_score, jsd = self.test_subsequent_learner(X_test, y_test)
 
         # Calculate the reward as the improvement in score from the previous step.
-        reward = new_score - self.prev_score - jsd
+        reward = new_score - self.prev_score
         self.cur_score = new_score
 
         # Update the environment's state to reflect the new set of selected features.
@@ -99,7 +108,7 @@ class ISOFAEnvironment:
 
     def train_subsequent_learner(self, X_train, y_train):
         model = XGBClassifier(eval_metric='auc', enable_categorical=True,
-                                  use_label_encoder=False)
+                              use_label_encoder=False)
         model.fit(X_train, y_train)
         return model
 
@@ -109,11 +118,11 @@ class ISOFAEnvironment:
 
         # Convert predictions to a histogram/distribution if using a discrete representation
         # Here, you could simply use y_pred_prob directly if treating them as a continuous distribution
-        pred_hist, _ = np.histogram(y_pred_prob, bins=2, range=(0,1), density=True)
+        pred_hist, _ = np.histogram(y_pred_prob, bins=2, range=(0, 1), density=True)
         pred_hist = pred_hist / np.sum(pred_hist)  # Normalize to form a probability distribution
 
         # Convert true labels to a histogram/distribution
-        true_hist, _ = np.histogram(y_test, bins=2, range=(0,1), density=True)
+        true_hist, _ = np.histogram(y_test, bins=2, range=(0, 1), density=True)
         true_hist = true_hist / np.sum(true_hist)  # Normalize
 
         # Compute Jensen-Shannon Divergence
@@ -125,7 +134,6 @@ class ISOFAEnvironment:
         print("AUC:", auc)
 
         return auc, jsd
-
 
     def get_training_dataset(self):
         return self.split_data(self.current_training_set.loc[:, self.selected_features + [self.target]])
@@ -140,3 +148,18 @@ class ISOFAEnvironment:
     def compute_jsd(self, p, q):
         """ Compute the Jensen-Shannon divergence using square of the JSD distance. """
         return distance.jensenshannon(p, q) ** 2
+
+    def calc_mutual_info(self, feat):
+        if self.data[feat].dtype in ['int64', 'float64']:
+            # Discretize the column
+            discretized = pd.cut(self.data[feat], bins=10, labels=False, duplicates='drop')
+           # discretized = discretized.fillna(-1)  # TEMP STRATEGY FOR NAN VALUES
+            mi = mutual_info_score(discretized, self.y)
+        else:
+            self.data[feat].cat.add_categories("Unknown")
+           # filled_series = self.data[feat].fillna('Unknown')  # TEMP STRATEGY FOR NAN VALUES
+            # print(self.df_sketch[feat], self.df_sketch[target])
+            mi = mutual_info_score(self.data[feat], self.y)
+
+        return mi
+

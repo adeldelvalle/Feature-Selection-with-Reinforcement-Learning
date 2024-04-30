@@ -17,9 +17,12 @@ t_core = t_core.merge(t_candidate, on='Loyalty Number', how='left')
 
 for feat in t_core:
     if t_core[feat].dtype == 'object':
+        t_core[feat] = t_core[feat].fillna('Unknown')
         t_core[feat] = t_core[feat].astype('category')
+    else:
+        t_core[feat] = t_core[feat].fillna(-1)  # TEMP STRATEGY FOR NAN VALUES
 
-
+t_core.drop(['Cancellation Month'], axis=1, inplace=True)
 
 
 model_target = 0
