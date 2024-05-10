@@ -44,3 +44,8 @@ print("Agent Ready!")
 
 # Train the workload
 autodata.train()
+
+autodata.plot_performance_vs_gradients() # This plots the recorded gradients and performance metrics
+autodata.plot_loss()
+autodata.plot_gradients()
+

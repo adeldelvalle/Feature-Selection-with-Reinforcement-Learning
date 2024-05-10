@@ -13,7 +13,7 @@ import random
 class Net(nn.Module):
     def __init__(self, feature_action_num):
         super(Net, self).__init__()
-        self.fc1 = nn.Linear(2 * feature_action_num, 256)  # Adjust input dimension here
+        self.fc1 = nn.Linear(3 * feature_action_num, 256)  # Adjust input dimension here
         self.fc2 = nn.Linear(256, 128)
         self.ft_fc = nn.Linear(128, feature_action_num)
 
@@ -33,7 +33,7 @@ class Autofeature_agent:
         self.batch_size = batch_size
         self.update_freq = update_freq
         self.memory_capacity = mem_cap
-        self.mem = np.zeros((self.memory_capacity, 4 * self.env.state_len + 2))
+        self.mem = np.zeros((self.memory_capacity, 3 * self.env.state_len * 2 + 2))  # Correct dimension for memory
         self.mem_counter = 0
         self.learning_step_counter = 0
 
@@ -55,6 +55,7 @@ class Autofeature_agent:
         return action
 
     def store_transition(self, state, action, reward, next_state):
+        # Ensure the state representation method returns a flattened array of the correct size
         state_vec = self.state_representation(state).numpy()
         next_state_vec = self.state_representation(next_state).numpy()
         action_reward = np.array([action, reward])  # 1D array for action and reward
@@ -67,13 +68,21 @@ class Autofeature_agent:
     def learn(self):
         if self.mem_counter < self.batch_size:
             return
+
         sample_index = np.random.choice(min(self.mem_counter, self.memory_capacity), self.batch_size)
         batch_memory = self.mem[sample_index, :]
-        batch_state = torch.tensor(batch_memory[:, :2 * self.env.state_len],
-                                   dtype=torch.float)  # Ensure this matches the flattened state dimension
-        batch_action = torch.tensor(batch_memory[:, 2 * self.env.state_len].astype(int), dtype=torch.long)
-        batch_reward = torch.tensor(batch_memory[:, 2 * self.env.state_len + 1], dtype=torch.float)
-        batch_next_state = torch.tensor(batch_memory[:, -(2 * self.env.state_len):], dtype=torch.float)
+
+        # Assuming first part of the memory holds current state
+        batch_state = torch.tensor(batch_memory[:, :3 * self.env.state_len],
+                                   dtype=torch.float)
+
+        # Assuming the second part holds next state
+        batch_next_state = torch.tensor(batch_memory[:, 3 * self.env.state_len: 6 * self.env.state_len],
+                                        dtype=torch.float)
+
+        # Action and reward follow after the current and next state sections
+        batch_action = torch.tensor(batch_memory[:, 6 * self.env.state_len].astype(int), dtype=torch.long)
+        batch_reward = torch.tensor(batch_memory[:, 6 * self.env.state_len + 1], dtype=torch.float)
 
         q_eval = self.eval_net(batch_state).gather(1, batch_action.unsqueeze(1))
         q_next = self.target_net(batch_next_state).detach()
@@ -130,4 +139,5 @@ class Autofeature_agent:
         """
         binary_flags = torch.tensor(state[0], dtype=torch.float32)
         info_gains = torch.tensor(state[1], dtype=torch.float32)
-        return torch.cat((binary_flags, info_gains))
+        correlations = torch.tensor(state[2], dtype=torch.float32)  # New state part
+        return torch.cat((binary_flags, info_gains, correlations))
